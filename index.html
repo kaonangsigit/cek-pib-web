@@ -123,7 +123,7 @@
         background: white;
         padding: 25px;
         border-radius: 14px;
-        width: 300px;
+        width: 320px;
         text-align: center;
         display: none;
         box-shadow: 0 0 20px rgba(0,0,0,0.25);
@@ -138,6 +138,12 @@
         border-radius: 10px;
         cursor: pointer;
         margin-top: 10px;
+    }
+
+    /* small responsive tweaks */
+    @media (max-width:600px){
+        header{font-size:18px;padding:14px}
+        .nav button{padding:8px 16px;font-size:14px}
     }
 </style>
 </head>
@@ -193,9 +199,8 @@
 </div>
 
 <script>
-
 /* ========================
-       ALERT SYSTEM
+     ALERT SYSTEM
 ======================== */
 function alertMsg(msg) {
     document.getElementById("alertMsg").innerText = msg;
@@ -206,7 +211,7 @@ function closeAlert() {
 }
 
 /* ========================
-     PAGE SWITCH
+   PAGE SWITCH
 ======================== */
 function showPage(p) {
     document.getElementById("pageCompare").style.display = (p === 'compare') ? "block" : "none";
@@ -219,7 +224,7 @@ function showPage(p) {
 /* ========================
      CLEAN PIB VALUE
 ======================== */
-function cleanPIB(x) {
+function cleanPIBString(x) {
     return String(x || "")
         .replace(/['"]/g, "")
         .replace(/\s+/g, "")
@@ -227,62 +232,144 @@ function cleanPIB(x) {
 }
 
 /* =====================================================
-   DETEKSI HEADER OTOMATIS (PERSIS SEPERTI COLAB)
+   DETECTION HELPERS
+   - detectHeaderRow: search for a header row containing "NO PIB" or "PIB"
+   - isMatrixNoHeader: decide if the sheet effectively has no header
+   - detectPIBColumnByHeader: find PIB column name when headers exist
+   - detectPIBColumnByContent: when no header, find column index by content
 ===================================================== */
-function detectHeaderRow(sheetRange) {
-    for (let r = 0; r < sheetRange.length; r++) {
-        const row = sheetRange[r].map(v => String(v || "").toUpperCase());
-        if (row.some(v => v.includes("NO. PIB"))) return r;
+
+function detectHeaderRowFromMatrix(matrix) {
+    // matrix is array of rows, each row is array of cells
+    for (let r = 0; r < Math.min(matrix.length, 20); r++) {
+        const row = matrix[r].map(v => String(v || "").toUpperCase());
+        // check variations
+        if (row.some(v => v.includes('NO. PIB') || v.includes('NO_PIB') || v.includes('NO PIB') || v.includes('NO_PIB') || v.includes('NOMOR PIB') || v.includes('NOPIB') )) return r;
     }
-    for (let r = 0; r < sheetRange.length; r++) {
-        const row = sheetRange[r].map(v => String(v || "").toUpperCase());
-        if (row.some(v => v.includes("PIB"))) return r;
+    for (let r = 0; r < Math.min(matrix.length, 20); r++) {
+        const row = matrix[r].map(v => String(v || "").toUpperCase());
+        if (row.some(v => v.includes('PIB'))) return r;
     }
-    return 0;
+    return -1; // not found
 }
 
-/* =====================================================
-   READ EXCEL DENGAN HEADER DINAMIS (super penting!)
-===================================================== */
-async function readExcelDynamicHeader(file) {
-    const buf = await file.arrayBuffer();
-    const wb = XLSX.read(buf);
+function isLikelyNoHeader(matrix) {
+    // Heuristics: if first rows are mostly numeric-only values and there are no obvious header words
+    // Check first 3 rows: if more than half columns are numeric-like and there's no cell with letters -> treat as no header
+    const checkRows = Math.min(3, matrix.length);
+    if (checkRows === 0) return true;
 
-    const sheet = wb.Sheets[wb.SheetNames[0]];
-    const raw = XLSX.utils.sheet_to_json(sheet, {
-        header: 1,
-        defval: ""
-    });
+    let anyAlpha = false;
+    let numericCounts = 0;
+    let totalCells = 0;
+    for (let r = 0; r < checkRows; r++) {
+        for (let c = 0; c < matrix[r].length; c++) {
+            const v = String(matrix[r][c] || "").trim();
+            if (/[A-Za-z]/.test(v)) anyAlpha = true;
+            if (/^"?\d{1,}\"?$/.test(v)) numericCounts++;
+            totalCells++;
+        }
+    }
+    // if no alphabet found in first rows and many numeric cells, likely no header
+    if (!anyAlpha && totalCells > 0 && (numericCounts / totalCells) > 0.5) return true;
+    return false;
+}
 
-    const headerRowIdx = detectHeaderRow(raw);
-    const data = XLSX.utils.sheet_to_json(sheet, {
-        header: 1,
-        range: headerRowIdx,
-        defval: ""
-    });
+function detectPIBColumnByHeader(objRow) {
+    const keys = Object.keys(objRow || {});
+    for (let k of keys) {
+        const norm = k.toUpperCase().replace(/[^A-Z0-9]/g, "");
+        if (norm.includes('PIB')) return k;
+    }
+    for (let k of keys) {
+        const norm = k.toUpperCase().replace(/[^A-Z0-9]/g, "");
+        if (norm.includes('NOPIB') || norm.includes('NOMORPIB')) return k;
+    }
+    return null;
+}
 
-    const headers = data.shift();
-    return data.map(row => {
-        let obj = {};
-        headers.forEach((h, i) => obj[h] = row[i]);
-        return obj;
-    });
+function detectPIBColumnByContent(matrix) {
+    // matrix = array of rows (arrays)
+    // evaluate each column: count how many cells match PIB pattern
+    if (!matrix || matrix.length === 0) return -1;
+    const rows = matrix.length;
+    const cols = Math.max(...matrix.map(r => r.length));
+    const pattern = /^"?\d{6,}\"?$/; // optional leading quote, at least 6 digits
+
+    let bestIdx = -1;
+    let bestScore = 0;
+    for (let c = 0; c < cols; c++) {
+        let score = 0;
+        let nonEmpty = 0;
+        for (let r = 0; r < rows; r++) {
+            const v = String((matrix[r][c] === undefined) ? "" : matrix[r][c]).trim();
+            if (v !== "") nonEmpty++;
+            if (pattern.test(v)) score++;
+        }
+        // require at least a modest number of matches (3) or >=10% of rows
+        const threshold = Math.max(3, Math.ceil(rows * 0.1));
+        if (score >= threshold && score > bestScore) {
+            bestScore = score;
+            bestIdx = c;
+        }
+    }
+    return bestIdx; // -1 if not found
 }
 
 /* ========================
-   DETEKSI KOLOM PIB
+   READ EXCEL DENGAN HEADER DINAMIS
+   - returns object { mode: 'header'|'no-header', headerRowIndex, data }
+   - data: if header mode -> array of objects
+           if no-header -> matrix (array of rows arrays)
 ======================== */
-function detectKolomPIB(row) {
-    const keys = Object.keys(row);
-    for (let k of keys) {
-        const n = k.toUpperCase().replace(/[^A-Z0-9]/g, "");
-        if (n.includes("PIB")) return k;
+async function readExcelSmart(file) {
+    const buf = await file.arrayBuffer();
+    const wb = XLSX.read(buf);
+    const sheet = wb.Sheets[wb.SheetNames[0]];
+
+    // raw matrix
+    const raw = XLSX.utils.sheet_to_json(sheet, { header: 1, defval: "" });
+
+    // try detect header row
+    const headerIdx = detectHeaderRowFromMatrix(raw);
+    if (headerIdx >= 0) {
+        // build objects from that header
+        const dataWithHeader = XLSX.utils.sheet_to_json(sheet, { header: 1, range: headerIdx, defval: "" });
+        const headers = dataWithHeader.shift();
+        const objects = dataWithHeader.map(row => {
+            const obj = {};
+            headers.forEach((h, i) => obj[h] = row[i]);
+            return obj;
+        });
+        return { mode: 'header', headerRowIndex: headerIdx, headers: headers, data: objects, rawMatrix: raw };
     }
-    for (let k of keys) {
-        const n = k.toUpperCase().replace(/[^A-Z0-9]/g, "");
-        if (n.includes("NOPIB") || n.includes("NOMORPIB")) return k;
+
+    // fallback: heuristics to decide if file has no header
+    if (isLikelyNoHeader(raw)) {
+        return { mode: 'no-header', headerRowIndex: -1, data: raw, rawMatrix: raw };
     }
-    return null;
+
+    // otherwise try to read as if header at row 0
+    const defaultObjects = XLSX.utils.sheet_to_json(sheet, { defval: "" });
+    if (defaultObjects && defaultObjects.length > 0) {
+        return { mode: 'header', headerRowIndex: 0, headers: Object.keys(defaultObjects[0]), data: defaultObjects, rawMatrix: raw };
+    }
+
+    // as last fallback, return no-header matrix
+    return { mode: 'no-header', headerRowIndex: -1, data: raw, rawMatrix: raw };
+}
+
+/* helper to force PIB cells to text in a sheet created from aoa */
+function forcePIBAsTextInSheet(ws, matrix, pibColIdx) {
+    if (pibColIdx === -1) return;
+    for (let r = 0; r < matrix.length; r++) {
+        const addr = XLSX.utils.encode_cell({ c: pibColIdx, r: r });
+        if (!ws[addr]) ws[addr] = { t: 's', v: '' };
+        else {
+            ws[addr].t = 's';
+            ws[addr].v = cleanPIBString(ws[addr].v || '');
+        }
+    }
 }
 
 /* ========================
@@ -292,37 +379,73 @@ async function processComparison() {
     const fLama = fileLama.files[0];
     const fBaru = fileBaru.files[0];
 
-    if (!fLama || !fBaru)
-        return alertMsg("Harap upload kedua file.");
+    if (!fLama || !fBaru) return alertMsg("Harap upload kedua file.");
 
-    const lama = await readExcelDynamicHeader(fLama);
-    const baru = await readExcelDynamicHeader(fBaru);
+    const readLama = await readExcelSmart(fLama);
+    const readBaru = await readExcelSmart(fBaru);
 
-    const kolom = detectKolomPIB(lama[0]);
-    if (!kolom)
-        return alertMsg("Kolom PIB tidak ditemukan di file lama.");
+    // If both have header mode (most common case) -> use object logic (existing logic)
+    if (readLama.mode === 'header' && readBaru.mode === 'header') {
+        const lama = readLama.data;
+        const baru = readBaru.data;
+        const kolom = detectPIBColumnByHeader(lama[0]);
+        if (!kolom) return alertMsg("Kolom PIB tidak ditemukan di file lama.");
 
-    const lamaPIB = lama.map(r => cleanPIB(r[kolom]));
-    const baruPIB = baru.map(r => cleanPIB(r[kolom]));
+        const lamaPIB = lama.map(r => cleanPIBString(r[kolom]));
+        let hasil = baru.filter(r => !lamaPIB.includes(cleanPIBString(r[kolom])));
 
-    let hasil = baru.filter(r => !lamaPIB.includes(cleanPIB(r[kolom])));
+        hasil = hasil.map(r => {
+            const copy = {...r};
+            copy[kolom] = cleanPIBString(copy[kolom]);
+            return copy;
+        });
 
-    hasil = hasil.map(r => {
-        let copy = {...r};
-        copy[kolom] = cleanPIB(copy[kolom]);
-        return copy;
-    });
+        document.getElementById("resultCompare").style.display = "block";
+        document.getElementById("resultCompare").innerHTML = `\n            <b>Jumlah Data Lama:</b> ${lama.length}<br>\n            <b>Jumlah Data Baru:</b> ${baru.length}<br>\n            <b>Data Baru:</b> ${hasil.length}<br>\n        `;
 
-    document.getElementById("resultCompare").style
-.display = "block";
-    document.getElementById("resultCompare").innerHTML = `
-        <b>Jumlah Data Lama:</b> ${lama.length}<br>
-        <b>Jumlah Data Baru:</b> ${baru.length}<br>
-        <b>Data Baru:</b> ${hasil.length}<br>
-    `;
+        if (hasil.length > 0) {
+            const ws = XLSX.utils.json_to_sheet(hasil);
+            const wb = XLSX.utils.book_new();
+            XLSX.utils.book_append_sheet(wb, ws, "BARU");
+            XLSX.writeFile(wb, "DATA_BARU_SAJA.xlsx");
+        }
+        return;
+    }
 
-    if (hasil.length > 0) {
-        const ws = XLSX.utils.json_to_sheet(hasil);
+    // If either file is no-header or mixed, process using matrix mode but preserve structure
+    // Convert raw matrices and detect PIB column by content
+    const matrixLama = readLama.data; // array of rows arrays
+    const matrixBaru = readBaru.data;
+
+    const pibIdxLama = detectPIBColumnByContent(matrixLama);
+    const pibIdxBaru = detectPIBColumnByContent(matrixBaru);
+
+    const pibIdx = pibIdxBaru !== -1 ? pibIdxBaru : pibIdxLama; // prefer baru's detection
+    if (pibIdx === -1) return alertMsg("Kolom PIB tidak ditemukan pada file (tidak ada header dan tidak ketemu dari isi).");
+
+    // Extract cleaned PIB lists
+    const lamaPIBList = matrixLama.map(r => cleanPIBString(r[pibIdx] || '') ).filter(v=>v!=='');
+    // create set for faster lookup
+    const lamaSet = new Set(lamaPIBList);
+
+    const hasilRows = [];
+    for (let r = 0; r < matrixBaru.length; r++) {
+        const val = cleanPIBString(matrixBaru[r][pibIdx] || '');
+        if (!lamaSet.has(val) && val !== '') {
+            // copy original row and clean pib value only
+            const newRow = matrixBaru[r].slice();
+            newRow[pibIdx] = val;
+            hasilRows.push(newRow);
+        }
+    }
+
+    document.getElementById("resultCompare").style.display = "block";
+    document.getElementById("resultCompare").innerHTML = `\n        <b>Jumlah Data Lama (baris):</b> ${matrixLama.length}<br>\n        <b>Jumlah Data Baru (baris):</b> ${matrixBaru.length}<br>\n        <b>Data Baru (baris):</b> ${hasilRows.length}<br>\n    `;
+
+    if (hasilRows.length > 0) {
+        // create sheet from aoa (no header)
+        const ws = XLSX.utils.aoa_to_sheet(hasilRows);
+        forcePIBAsTextInSheet(ws, hasilRows, pibIdx);
         const wb = XLSX.utils.book_new();
         XLSX.utils.book_append_sheet(wb, ws, "BARU");
         XLSX.writeFile(wb, "DATA_BARU_SAJA.xlsx");
@@ -334,25 +457,47 @@ async function processComparison() {
 ======================== */
 async function processCleaner() {
     const file = fileClean.files[0];
-    if (!file)
-        return alertMsg("Harap upload file.");
+    if (!file) return alertMsg("Harap upload file.");
 
-    const data = await readExcelDynamicHeader(file);
-    const kolom = detectKolomPIB(data[0]);
+    const read = await readExcelSmart(file);
 
-    if (!kolom)
-        return alertMsg("Kolom PIB tidak ditemukan.");
+    if (read.mode === 'header') {
+        const data = read.data;
+        const kolom = detectPIBColumnByHeader(data[0]);
+        if (!kolom) return alertMsg("Kolom PIB tidak ditemukan.");
 
-    const cleaned = data.map(r => {
-        let copy = {...r};
-        copy[kolom] = cleanPIB(copy[kolom]);
-        return copy;
+        const cleaned = data.map(r => {
+            const copy = {...r};
+            copy[kolom] = cleanPIBString(copy[kolom]);
+            return copy;
+        });
+
+        document.getElementById("resultClean").style.display = "block";
+        document.getElementById("resultClean").innerHTML = "File berhasil dibersihkan.";
+
+        const ws = XLSX.utils.json_to_sheet(cleaned);
+        const wb = XLSX.utils.book_new();
+        XLSX.utils.book_append_sheet(wb, ws, "BERSIH");
+        XLSX.writeFile(wb, "PIB_TANPA_PETIK.xlsx");
+        return;
+    }
+
+    // no-header mode: clean in matrix and preserve structure
+    const matrix = read.data; // array of rows (arrays)
+    const pibIdx = detectPIBColumnByContent(matrix);
+    if (pibIdx === -1) return alertMsg("Kolom PIB tidak ditemukan pada file (no-header).");
+
+    const cleanedMatrix = matrix.map((row) => {
+        const r = row.slice();
+        r[pibIdx] = cleanPIBString(r[pibIdx] || '');
+        return r;
     });
 
     document.getElementById("resultClean").style.display = "block";
-    document.getElementById("resultClean").innerHTML = "File berhasil dibersihkan.";
+    document.getElementById("resultClean").innerHTML = "File berhasil dibersihkan (format tanpa header).";
 
-    const ws = XLSX.utils.json_to_sheet(cleaned);
+    const ws = XLSX.utils.aoa_to_sheet(cleanedMatrix);
+    forcePIBAsTextInSheet(ws, cleanedMatrix, pibIdx);
     const wb = XLSX.utils.book_new();
     XLSX.utils.book_append_sheet(wb, ws, "BERSIH");
     XLSX.writeFile(wb, "PIB_TANPA_PETIK.xlsx");
