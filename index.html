@@ -31,6 +31,7 @@
         background: #c6e9d2;
         padding: 15px 0;
         gap: 20px;
+        flex-wrap: wrap;
     }
 
     .nav button {
@@ -73,14 +74,14 @@
         display: flex;
         flex-direction: row;
         justify-content: space-between;
-        flex-wrap: nowrap;
+        flex-wrap: wrap;
         gap: 20px;
         width: 100%;
         margin-bottom: 20px;
     }
 
     .upload-box {
-        width: 50%;
+        flex: 1;
         min-width: 260px;
         border: 2px dashed #9ccbb1;
         padding: 20px;
@@ -214,9 +215,7 @@ function closeAlert() {
     document.getElementById("alertBox").style.display = "none";
 }
 
-/* ========================
-   PAGE SWITCH
-======================== */
+/* PAGE SWITCH */
 function showPage(p) {
     document.getElementById("pageCompare").style.display = (p === 'compare') ? "block" : "none";
     document.getElementById("pageClean").style.display = (p === 'clean') ? "block" : "none";
@@ -225,50 +224,51 @@ function showPage(p) {
     document.getElementById("btnClean").classList.toggle("active", p === 'clean');
 }
 
-/* ========================
-    PIB NORMALIZER
-======================== */
+/* CLEAN PIB VALUE */
 function cleanPIB(x) {
     return String(x || "")
         .replace(/['"]/g, "")
+        .replace(/\s+/g, "")
         .trim();
 }
 
-/* ========================
-    DETEKSI KOLOM PIB
-======================== */
+/* DETEKSI KOLOM PIB SUPER AKURAT */
 function detectKolomPIB(row) {
-    const keys = Object.keys(row);
+    if (!row) return null;
 
-    for (let k of keys) {
-        const norm = k.toUpperCase().replace(/[^A-Z0-9]/g, "");
-        if (norm.includes("NO") && norm.includes("PIB")) return k;
+    const COLS = Object.keys(row);
+
+    // 1. Cari kolom yang mengandung PIB
+    for (let c of COLS) {
+        const n = c.toUpperCase().replace(/[^A-Z0-9]/g, "");
+        if (n.includes("PIB")) return c;
     }
 
-    for (let k of keys) {
-        if (String(row[k] || "").includes("'") || String(row[k] || "").includes('"')) {
-            return k;
-        }
+    // 2. NO PIB, NO. PIB, NO_PIB
+    for (let c of COLS) {
+        const n = c.toUpperCase().replace(/[^A-Z0-9]/g, "");
+        if (n.includes("NOPIB") || n.includes("NOMORPIB")) return c;
+    }
+
+    // 3. Deteksi dari isi
+    for (let c of COLS) {
+        const v = cleanPIB(row[c]);
+        if (/^\d{6,}$/.test(v)) return c;
     }
 
     return null;
 }
 
-/* ========================
-    BACA EXCEL
-======================== */
+/* READ EXCEL */
 async function readExcel(file) {
-    const data = await file.arrayBuffer();
-    const wb = XLSX.read(data);
+    const buf = await file.arrayBuffer();
+    const wb = XLSX.read(buf);
     const sheet = wb.Sheets[wb.SheetNames[0]];
     return XLSX.utils.sheet_to_json(sheet, { defval: "" });
 }
 
-/* ========================
-  PROSES PERBANDINGAN
-======================== */
+/* PROSES PERBANDINGAN */
 async function processComparison() {
-
     const fLama = fileLama.files[0];
     const fBaru = fileBaru.files[0];
 
@@ -278,7 +278,7 @@ async function processComparison() {
     const baru = await readExcel(fBaru);
 
     const kolom = detectKolomPIB(lama[0]);
-    if (!kolom) return alertMsg("Kolom PIB tidak ditemukan.");
+    if (!kolom) return alertMsg("Kolom PIB tidak ditemukan!");
 
     const lamaPIB = lama.map(r => cleanPIB(r[kolom]));
     const baruPIB = baru.map(r => cleanPIB(r[kolom]));
@@ -308,11 +308,8 @@ async function processComparison() {
     }
 }
 
-/* ========================
-  PEMBERSIH PETIK
-======================== */
+/* PEMBERSIH PETIK */
 async function processCleaner() {
-
     const file = fileClean.files[0];
     if (!file) return alertMsg("Harap upload file.");
 
@@ -337,22 +334,17 @@ async function processCleaner() {
     XLSX.writeFile(wb, "PIB_TANPA_PETIK.xlsx");
 }
 
-/* ========================
-   FORCE TEXT FORMAT PIB
-======================== */
+/* FORCE TEXT PIB */
 function forcePIBtoText(ws, data, kolom) {
     const header = XLSX.utils.sheet_to_json(ws, { header: 1, range: 0 })[0];
     let idx = header.indexOf(kolom);
-    
+
     if (idx === -1) return;
 
     for (let r = 1; r <= data.length; r++) {
         const addr = XLSX.utils.encode_cell({ c: idx, r: r });
-        if (!ws[addr]) ws[addr] = { t: "s", v: "" };
-        else {
-            ws[addr].t = "s";
-            ws[addr].v = cleanPIB(ws[addr].v);
-        }
+        ws[addr].t = "s";
+        ws[addr].v = cleanPIB(ws[addr].v || "");
     }
 }
 
