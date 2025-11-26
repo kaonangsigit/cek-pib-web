@@ -26,6 +26,7 @@
                 padding:25px; border-radius:14px; width:320px; text-align:center; display:none;
                 box-shadow:0 0 20px rgba(0,0,0,.25); z-index:1000;}
     .alertBox button { background:#ff3b30; color:white; padding:8px 22px; border:none; border-radius:10px; cursor:pointer; }
+    @media (max-width:600px){ header{font-size:18px;padding:14px} .nav button{padding:8px 16px;font-size:14px} }
 </style>
 </head>
 
@@ -82,9 +83,7 @@
 </div>
 
 <script>
-/* ====================================================== */
 /* UI/ALERT */
-/* ====================================================== */
 function alertMsg(msg){
     document.getElementById("alertMsg").innerText = msg;
     document.getElementById("alertBox").style.display = "block";
@@ -94,194 +93,235 @@ function closeAlert(){ document.getElementById("alertBox").style.display="none";
 function showPage(p){
     pageCompare.style.display = (p==="compare") ? "block" : "none";
     pageClean.style.display = (p==="clean") ? "block" : "none";
-
     btnCompare.classList.toggle("active", p==="compare");
     btnClean.classList.toggle("active", p==="clean");
 }
 
-/* ====================================================== */
-/* UTIL / CLEANING */
-/* ====================================================== */
+/* UTIL: bersihkan string PIB */
 function cleanPIB(x){
     return String(x||"").replace(/['"]/g,"").replace(/\s+/g,"").trim();
 }
 
-/* ====================================================== */
-/* SMART READER (AMAN) */
-/* ====================================================== */
+/* ============================
+   SMART READER: baca sheet dengan aman (header detection)
+   Mengembalikan object:
+   - mode: 'header' atau 'no-header'
+   - sheet (worksheet object)
+   - raw (matrix header:1)
+   - headers/dataObj (jika header)
+   ============================ */
 async function readExcel(file){
     const buf = await file.arrayBuffer();
     const wb  = XLSX.read(buf);
     const sheet = wb.Sheets[wb.SheetNames[0]];
     const raw = XLSX.utils.sheet_to_json(sheet,{header:1,defval:""});
 
-    // DETEKSI HEADER (baris yang ada NO_PIB / PIB)
+    // detect header row (first 20 baris)
     let headerRow = -1;
     for(let r=0;r<Math.min(raw.length,20);r++){
-        const upper = raw[r].map(v=>String(v).toUpperCase());
-        if(upper.some(v=>v.includes("PIB"))) { headerRow=r; break; }
+        const upper = raw[r].map(v=>String(v||"").toUpperCase());
+        if(upper.some(v=> v.includes("NO. PIB") || v.includes("NO_PIB") || v.includes("NO PIB") || v.includes("NOPIB") || v.includes("PIB") )){
+            headerRow=r; break;
+        }
     }
 
-    if(headerRow >=0){
-        const data = XLSX.utils.sheet_to_json(sheet,{header:1,range:headerRow,defval:""});
-        const headers = data.shift();
-        const rowsObj = data.map(row=>{
-            let o={};
-            headers.forEach((h,i)=>o[h]=row[i]);
+    if(headerRow >= 0){
+        // build objects using that header
+        const dataWithHeader = XLSX.utils.sheet_to_json(sheet,{header:1,range:headerRow,defval:""});
+        const headers = dataWithHeader.shift();
+        const dataObj = dataWithHeader.map(row=>{
+            const o={};
+            headers.forEach((h,i)=> o[h] = row[i]);
             return o;
         });
-        return {mode:"header", sheet, raw, headers, dataObj:rowsObj};
+        return { mode:"header", sheet, raw, headers, dataObj };
     }
 
-    // fallback no-header
-    return {mode:"no-header", sheet, raw};
+    // fallback: no-header mode
+    return { mode:"no-header", sheet, raw };
 }
 
-/* ====================================================== */
-/* DETEKSI KOLOM PIB */
-/* ====================================================== */
+/* DETEKSI KOLOM (header / content) */
 function detectPIBColumnByHeader(rowObj){
+    if(!rowObj) return null;
     const keys = Object.keys(rowObj);
     for(let k of keys){
-        let norm = k.toUpperCase().replace(/[^A-Z0-9]/g,"");
+        const norm = String(k||"").toUpperCase().replace(/[^A-Z0-9]/g,"");
         if(norm.includes("PIB")) return k;
-        if(norm.includes("NOPIB")||norm.includes("NOMORPIB")) return k;
+    }
+    for(let k of keys){
+        const norm = String(k||"").toUpperCase().replace(/[^A-Z0-9]/g,"");
+        if(norm.includes("NOPIB") || norm.includes("NOMORPIB")) return k;
     }
     return null;
 }
 
 function detectPIBColumnByContent(raw){
+    if(!raw || raw.length===0) return -1;
     const rows = raw.length;
     const cols = Math.max(...raw.map(r=>r.length));
-    const pattern = /^"?\d{6,}"?$/;
+    const pattern = /^\"?\d{6,}\"?$/; // optional quotes, min 6 digits
 
-    let best=-1, scoreBest=0;
+    let bestIdx=-1, bestScore=0;
     for(let c=0;c<cols;c++){
-        let score=0, nonempty=0;
+        let score=0, nonEmpty=0;
         for(let r=0;r<rows;r++){
-            const v = String(raw[r][c]||"").trim();
-            if(v!=="") nonempty++;
+            const v = String(raw[r][c] || "").trim();
+            if(v!=="") nonEmpty++;
             if(pattern.test(v)) score++;
         }
-        if(score>=3 && score>scoreBest){
-            scoreBest=score; best=c;
+        // threshold: at least 3 matches or >= 10% rows
+        const threshold = Math.max(3, Math.ceil(rows*0.1));
+        if(score >= threshold && score > bestScore){
+            bestScore = score;
+            bestIdx = c;
         }
     }
-    return best;
+    return bestIdx;
 }
 
-/* ====================================================== */
-/* CLEANER — AMAN (CELL-BY-CELL) */
-/* ====================================================== */
-function cleanSheetPIB(sheet, pibCol){
+/* EXTRACT valid PIB from matrix (no-header) */
+function extractValidPIBFromMatrix(matrix, idx){
+    const out = [];
+    if(!matrix || idx<0) return out;
+    const pattern = /^\d{6,}$/; // after cleaning (no quotes/spaces), pure digits min 6
+    for(let r=0;r<matrix.length;r++){
+        const rawv = String(matrix[r][idx] || "");
+        const v = cleanPIB(rawv);
+        if(pattern.test(v)) out.push(v);
+    }
+    return out;
+}
+
+/* EXTRACT valid PIB from array-of-objects (header mode) */
+function extractValidPIBFromObjects(arr, key){
+    const out = [];
+    if(!arr || !key) return out;
+    const pattern = /^\d{6,}$/;
+    for(const obj of arr){
+        const v = cleanPIB(obj[key] || "");
+        if(pattern.test(v)) out.push(v);
+    }
+    return out;
+}
+
+/* CLEAN sheet cell-by-cell on given column index (0-based) */
+function cleanSheetPIB(sheet, pibColIdx){
+    if(!sheet || !sheet["!ref"]) return;
     const range = XLSX.utils.decode_range(sheet["!ref"]);
-    for(let R=range.s.r; R<=range.e.r; R++){
-        const cellRef = XLSX.utils.encode_cell({r:R,c:pibCol});
-        const cell = sheet[cellRef];
+    for(let R = range.s.r; R <= range.e.r; R++){
+        const addr = XLSX.utils.encode_cell({r:R, c:pibColIdx});
+        const cell = sheet[addr];
         if(cell && typeof cell.v === "string"){
-            cell.v = cleanPIB(cell.v);
-            cell.t = "s";
+            const cleaned = cleanPIB(cell.v);
+            cell.v = cleaned;
+            cell.t = 's';
         }
     }
 }
 
-/* ====================================================== */
-/* PENGHILANG PETIK */
-/* ====================================================== */
+/* PROCESS CLEANER */
 async function processCleaner(){
     const file = fileClean.files[0];
     if(!file) return alertMsg("Harap upload file.");
 
     const read = await readExcel(file);
+    const sheet = read.sheet;
 
-    if(read.mode==="header"){
-        const sheet = read.sheet;
-        const kolom = detectPIBColumnByHeader(read.dataObj[0]);
-        if(!kolom) return alertMsg("Kolom PIB tidak ditemukan.");
-
-        // cari index kolom PIB
-        const idx = read.headers.indexOf(kolom);
-        if(idx === -1) return alertMsg("Index kolom PIB tidak valid.");
-
-        cleanSheetPIB(sheet, idx);
-
+    if(read.mode === "header"){
+        // detect column by header name
+        const kolomKey = detectPIBColumnByHeader(read.dataObj[0]);
+        if(!kolomKey) return alertMsg("Kolom PIB tidak ditemukan.");
+        const colIdx = read.headers.indexOf(kolomKey);
+        if(colIdx === -1) return alertMsg("Index kolom PIB tidak valid.");
+        cleanSheetPIB(sheet, colIdx);
     } else {
-        // no-header
+        // no-header: detect by content index
         const idx = detectPIBColumnByContent(read.raw);
-        if(idx === -1) return alertMsg("Kolom PIB tidak ditemukan dari isi.");
-        cleanSheetPIB(read.sheet, idx);
+        if(idx === -1) return alertMsg("Kolom PIB tidak ditemukan (no-header).");
+        cleanSheetPIB(sheet, idx);
     }
 
-    XLSX.writeFile(read.sheet, "PIB_TANPA_PETIK.xlsx");
-    resultClean.style.display="block";
-    resultClean.innerHTML="File berhasil dibersihkan (struktur aman).";
+    // write workbook (use workbook to ensure proper download)
+    const wb = XLSX.utils.book_new();
+    // append mutated sheet as a worksheet into a workbook
+    XLSX.utils.book_append_sheet(wb, sheet, "BERSIH");
+    XLSX.writeFile(wb, "PIB_TANPA_PETIK.xlsx");
+
+    resultClean.style.display = "block";
+    resultClean.innerHTML = "File berhasil dibersihkan (struktur aman).";
 }
 
-/* ====================================================== */
-/* PERBANDINGAN DATA (AMAN) */
-/* ====================================================== */
+/* PROCESS COMPARISON */
 async function processComparison(){
     const fLama = fileLama.files[0];
     const fBaru = fileBaru.files[0];
     if(!fLama || !fBaru) return alertMsg("Harap upload kedua file.");
 
-    const lama = await readExcel(fLama);
-    const baru = await readExcel(fBaru);
+    const readLama = await readExcel(fLama);
+    const readBaru = await readExcel(fBaru);
 
-    /* ==== HEADER MODE ==== */
-    if(lama.mode==="header" && baru.mode==="header"){
-        const kolom = detectPIBColumnByHeader(lama.dataObj[0]);
-        if(!kolom) return alertMsg("Kolom PIB tidak ditemukan.");
-
-        const lamaSet = new Set(lama.dataObj.map(r=>cleanPIB(r[kolom])));
-
-        const hasil = baru.dataObj.filter(r=>{
-            const v = cleanPIB(r[kolom]);
-            return v && !lamaSet.has(v);
+    // HEADER MODE (preferred)
+    if(readLama.mode==="header" && readBaru.mode==="header"){
+        const kolomKey = detectPIBColumnByHeader(readLama.dataObj[0]);
+        if(!kolomKey) return alertMsg("Kolom PIB tidak ditemukan di file lama.");
+        // extract valid PIBs
+        const lamaList = extractValidPIBFromObjects(readLama.dataObj, kolomKey);
+        const setLama = new Set(lamaList);
+        const hasil = readBaru.dataObj.filter(obj=>{
+            const v = cleanPIB(obj[kolomKey] || "");
+            // must be valid PIB (digits min6) and not in lama
+            return /^\d{6,}$/.test(v) && !setLama.has(v);
         });
 
-        resultCompare.style.display="block";
+        resultCompare.style.display = "block";
         resultCompare.innerHTML = `
-            <b>Jumlah Data Lama:</b> ${lama.dataObj.length}<br>
-            <b>Jumlah Data Baru:</b> ${baru.dataObj.length}<br>
+            <b>Jumlah Data Lama:</b> ${readLama.dataObj.length}<br>
+            <b>Jumlah Data Baru:</b> ${readBaru.dataObj.length}<br>
             <b>Data Baru:</b> ${hasil.length}<br>
         `;
 
-        if(hasil.length>0){
+        if(hasil.length > 0){
             const ws = XLSX.utils.json_to_sheet(hasil);
             const wb = XLSX.utils.book_new();
-            XLSX.utils.book_append_sheet(wb,ws,"BARU");
-            XLSX.writeFile(wb,"DATA_BARU_SAJA.xlsx");
+            XLSX.utils.book_append_sheet(wb, ws, "BARU");
+            XLSX.writeFile(wb, "DATA_BARU_SAJA.xlsx");
         }
-
         return;
     }
 
-    /* ==== NO-HEADER MODE ==== */
-    const lamaPIBidx = detectPIBColumnByContent(lama.raw);
-    const baruPIBidx = detectPIBColumnByContent(baru.raw);
-    const idx = (baruPIBidx !== -1) ? baruPIBidx : lamaPIBidx;
-
+    // NO-HEADER OR MIXED MODE: detect column index by content
+    const idxLama = detectPIBColumnByContent(readLama.raw);
+    const idxBaru = detectPIBColumnByContent(readBaru.raw);
+    const idx = (idxBaru !== -1) ? idxBaru : idxLama;
     if(idx === -1) return alertMsg("Kolom PIB tidak ditemukan dari isi file.");
 
-    const lamaVals = new Set(lama.raw.map(r=>cleanPIB(r[idx])));
-    const hasilRows = baru.raw.filter(r=>{
-        const v = cleanPIB(r[idx]);
-        return v && !lamaVals.has(v);
-    });
+    const lamaList = extractValidPIBFromMatrix(readLama.raw, idx);
+    const setLama = new Set(lamaList);
 
-    resultCompare.style.display="block";
+    const hasilRows = [];
+    for(let r=0;r<readBaru.raw.length;r++){
+        const v = cleanPIB(readBaru.raw[r][idx] || "");
+        if(/^\d{6,}$/.test(v) && !setLama.has(v)){
+            // push the entire original row (array), but replace the pib cell with cleaned value
+            const newRow = (readBaru.raw[r] || []).slice();
+            newRow[idx] = v;
+            hasilRows.push(newRow);
+        }
+    }
+
+    resultCompare.style.display = "block";
     resultCompare.innerHTML = `
-        <b>Jumlah Data Lama (baris):</b> ${lama.raw.length}<br>
-        <b>Jumlah Data Baru (baris):</b> ${baru.raw.length}<br>
+        <b>Jumlah Data Lama (baris):</b> ${readLama.raw.length}<br>
+        <b>Jumlah Data Baru (baris):</b> ${readBaru.raw.length}<br>
         <b>Data Baru (baris):</b> ${hasilRows.length}<br>
     `;
 
-    if(hasilRows.length>0){
+    if(hasilRows.length > 0){
         const ws = XLSX.utils.aoa_to_sheet(hasilRows);
         const wb = XLSX.utils.book_new();
-        XLSX.utils.book_append_sheet(wb,ws,"BARU");
-        XLSX.writeFile(wb,"DATA_BARU_SAJA.xlsx");
+        XLSX.utils.book_append_sheet(wb, ws, "BARU");
+        XLSX.writeFile(wb, "DATA_BARU_SAJA.xlsx");
     }
 }
 
@@ -289,7 +329,6 @@ async function processComparison(){
 fileLama.onchange = e=>labelLama.innerText = e.target.files[0]?.name || "Belum ada file";
 fileBaru.onchange = e=>labelBaru.innerText = e.target.files[0]?.name || "Belum ada file";
 fileClean.onchange = e=>labelClean.innerText = e.target.files[0]?.name || "Belum ada file";
-
 </script>
 
 </body>
