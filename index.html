@@ -1,0 +1,68 @@
+<!DOCTYPE html>
+<html>
+<head>
+  <title>Cek Data PIB</title>
+  <script src="https://cdn.jsdelivr.net/npm/xlsx/dist/xlsx.full.min.js"></script>
+</head>
+<body>
+
+<h2>Cek Data Baru vs Lama (PIB)</h2>
+
+<input type="file" id="fileLama" accept=".xlsx">
+<input type="file" id="fileBaru" accept=".xlsx">
+<button onclick="processFiles()">Proses</button>
+
+<div id="output"></div>
+
+<script>
+function clean(value) {
+  return String(value).replace("'", "").trim();
+}
+
+async function readExcel(file) {
+  const data = await file.arrayBuffer();
+  const workbook = XLSX.read(data);
+  const sheet = workbook.Sheets[workbook.SheetNames[0]];
+  return XLSX.utils.sheet_to_json(sheet, { raw: false });
+}
+
+async function processFiles() {
+  const fileLama = document.getElementById("fileLama").files[0];
+  const fileBaru = document.getElementById("fileBaru").files[0];
+
+  if (!fileLama || !fileBaru) {
+    alert("Upload kedua file!");
+    return;
+  }
+
+  const dataLama = await readExcel(fileLama);
+  const dataBaru = await readExcel(fileBaru);
+
+  // Temukan kolom NO. PIB
+  const kolomPIB = Object.keys(dataLama[0]).find(k => k.toUpperCase().includes("NO") && k.toUpperCase().includes("PIB"));
+
+  if (!kolomPIB) {
+    alert("Kolom NO. PIB tidak ditemukan!");
+    return;
+  }
+
+  // Bersihkan PIB
+  const oldPIB = dataLama.map(row => clean(row[kolomPIB]));
+  const newPIB = dataBaru.map(row => clean(row[kolomPIB]));
+
+  // Ambil data benar-benar baru
+  const dataBaruSaja = dataBaru.filter(r => !oldPIB.includes(clean(r[kolomPIB])));
+
+  document.getElementById("output").innerHTML =
+    `<p>Jumlah Data Baru: <b>${dataBaruSaja.length}</b></p>`;
+
+  // Download hasil sebagai Excel
+  const ws = XLSX.utils.json_to_sheet(dataBaruSaja);
+  const wb = XLSX.utils.book_new();
+  XLSX.utils.book_append_sheet(wb, ws, "DATA BARU");
+  XLSX.writeFile(wb, "DATA_BARU_SAJA.xlsx");
+}
+</script>
+
+</body>
+</html>
