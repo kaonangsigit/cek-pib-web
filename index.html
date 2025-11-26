@@ -24,7 +24,6 @@
         color: white;
     }
 
-    /* Navigation Bar */
     .nav {
         display: flex;
         justify-content: center;
@@ -53,7 +52,6 @@
         background: #0e8a47;
     }
 
-    /* Card Container */
     .container {
         max-width: 900px;
         margin: 25px auto;
@@ -69,7 +67,6 @@
         color: #0e3c20;
     }
 
-    /* Upload layout */
     .file-group {
         display: flex;
         flex-direction: row;
@@ -118,7 +115,6 @@
         border-radius: 12px;
     }
 
-    /* Alert Popup */
     .alertBox {
         position: fixed;
         left: 50%;
@@ -150,13 +146,11 @@
 
 <header>Aplikasi Pengecekan & Pembersihan PIB</header>
 
-<!-- TOP MENU -->
 <div class="nav">
     <button id="btnCompare" class="active" onclick="showPage('compare')">Perbandingan Data</button>
     <button id="btnClean" onclick="showPage('clean')">Pembersih Petik PIB</button>
 </div>
 
-<!-- PAGE 1: PERBANDINGAN -->
 <div id="pageCompare" class="container">
     <h2>Perbandingan Data Lama vs Baru</h2>
 
@@ -175,11 +169,9 @@
     </div>
 
     <button class="btn" onclick="processComparison()">Proses Perbandingan</button>
-
     <div id="resultCompare" class="result-box"></div>
 </div>
 
-<!-- PAGE 2: PEMBERSIH PETIK -->
 <div id="pageClean" class="container" style="display:none;">
     <h2>Pembersih Petik (') dan (") untuk Kolom PIB</h2>
 
@@ -192,11 +184,9 @@
     </div>
 
     <button class="btn" onclick="processCleaner()">Bersihkan Petik</button>
-
     <div id="resultClean" class="result-box"></div>
 </div>
 
-<!-- ALERT -->
 <div id="alertBox" class="alertBox">
     <div id="alertMsg"></div>
     <button onclick="closeAlert()">Tutup</button>
@@ -205,7 +195,7 @@
 <script>
 
 /* ========================
-     ALERT SYSTEM
+       ALERT SYSTEM
 ======================== */
 function alertMsg(msg) {
     document.getElementById("alertMsg").innerText = msg;
@@ -215,7 +205,9 @@ function closeAlert() {
     document.getElementById("alertBox").style.display = "none";
 }
 
-/* PAGE SWITCH */
+/* ========================
+     PAGE SWITCH
+======================== */
 function showPage(p) {
     document.getElementById("pageCompare").style.display = (p === 'compare') ? "block" : "none";
     document.getElementById("pageClean").style.display = (p === 'clean') ? "block" : "none";
@@ -224,7 +216,9 @@ function showPage(p) {
     document.getElementById("btnClean").classList.toggle("active", p === 'clean');
 }
 
-/* CLEAN PIB VALUE */
+/* ========================
+     CLEAN PIB VALUE
+======================== */
 function cleanPIB(x) {
     return String(x || "")
         .replace(/['"]/g, "")
@@ -232,53 +226,81 @@ function cleanPIB(x) {
         .trim();
 }
 
-/* DETEKSI KOLOM PIB SUPER AKURAT */
+/* =====================================================
+   DETEKSI HEADER OTOMATIS (PERSIS SEPERTI COLAB)
+===================================================== */
+function detectHeaderRow(sheetRange) {
+    for (let r = 0; r < sheetRange.length; r++) {
+        const row = sheetRange[r].map(v => String(v || "").toUpperCase());
+        if (row.some(v => v.includes("NO. PIB"))) return r;
+    }
+    for (let r = 0; r < sheetRange.length; r++) {
+        const row = sheetRange[r].map(v => String(v || "").toUpperCase());
+        if (row.some(v => v.includes("PIB"))) return r;
+    }
+    return 0;
+}
+
+/* =====================================================
+   READ EXCEL DENGAN HEADER DINAMIS (super penting!)
+===================================================== */
+async function readExcelDynamicHeader(file) {
+    const buf = await file.arrayBuffer();
+    const wb = XLSX.read(buf);
+
+    const sheet = wb.Sheets[wb.SheetNames[0]];
+    const raw = XLSX.utils.sheet_to_json(sheet, {
+        header: 1,
+        defval: ""
+    });
+
+    const headerRowIdx = detectHeaderRow(raw);
+    const data = XLSX.utils.sheet_to_json(sheet, {
+        header: 1,
+        range: headerRowIdx,
+        defval: ""
+    });
+
+    const headers = data.shift();
+    return data.map(row => {
+        let obj = {};
+        headers.forEach((h, i) => obj[h] = row[i]);
+        return obj;
+    });
+}
+
+/* ========================
+   DETEKSI KOLOM PIB
+======================== */
 function detectKolomPIB(row) {
-    if (!row) return null;
-
-    const COLS = Object.keys(row);
-
-    // 1. Cari kolom yang mengandung PIB
-    for (let c of COLS) {
-        const n = c.toUpperCase().replace(/[^A-Z0-9]/g, "");
-        if (n.includes("PIB")) return c;
+    const keys = Object.keys(row);
+    for (let k of keys) {
+        const n = k.toUpperCase().replace(/[^A-Z0-9]/g, "");
+        if (n.includes("PIB")) return k;
     }
-
-    // 2. NO PIB, NO. PIB, NO_PIB
-    for (let c of COLS) {
-        const n = c.toUpperCase().replace(/[^A-Z0-9]/g, "");
-        if (n.includes("NOPIB") || n.includes("NOMORPIB")) return c;
+    for (let k of keys) {
+        const n = k.toUpperCase().replace(/[^A-Z0-9]/g, "");
+        if (n.includes("NOPIB") || n.includes("NOMORPIB")) return k;
     }
-
-    // 3. Deteksi dari isi
-    for (let c of COLS) {
-        const v = cleanPIB(row[c]);
-        if (/^\d{6,}$/.test(v)) return c;
-    }
-
     return null;
 }
 
-/* READ EXCEL */
-async function readExcel(file) {
-    const buf = await file.arrayBuffer();
-    const wb = XLSX.read(buf);
-    const sheet = wb.Sheets[wb.SheetNames[0]];
-    return XLSX.utils.sheet_to_json(sheet, { defval: "" });
-}
-
-/* PROSES PERBANDINGAN */
+/* ========================
+  PROSES PERBANDINGAN
+======================== */
 async function processComparison() {
     const fLama = fileLama.files[0];
     const fBaru = fileBaru.files[0];
 
-    if (!fLama || !fBaru) return alertMsg("Harap upload kedua file.");
+    if (!fLama || !fBaru)
+        return alertMsg("Harap upload kedua file.");
 
-    const lama = await readExcel(fLama);
-    const baru = await readExcel(fBaru);
+    const lama = await readExcelDynamicHeader(fLama);
+    const baru = await readExcelDynamicHeader(fBaru);
 
     const kolom = detectKolomPIB(lama[0]);
-    if (!kolom) return alertMsg("Kolom PIB tidak ditemukan!");
+    if (!kolom)
+        return alertMsg("Kolom PIB tidak ditemukan di file lama.");
 
     const lamaPIB = lama.map(r => cleanPIB(r[kolom]));
     const baruPIB = baru.map(r => cleanPIB(r[kolom]));
@@ -286,12 +308,13 @@ async function processComparison() {
     let hasil = baru.filter(r => !lamaPIB.includes(cleanPIB(r[kolom])));
 
     hasil = hasil.map(r => {
-        const copy = {...r};
+        let copy = {...r};
         copy[kolom] = cleanPIB(copy[kolom]);
         return copy;
     });
 
-    document.getElementById("resultCompare").style.display = "block";
+    document.getElementById("resultCompare").style
+.display = "block";
     document.getElementById("resultCompare").innerHTML = `
         <b>Jumlah Data Lama:</b> ${lama.length}<br>
         <b>Jumlah Data Baru:</b> ${baru.length}<br>
@@ -300,25 +323,28 @@ async function processComparison() {
 
     if (hasil.length > 0) {
         const ws = XLSX.utils.json_to_sheet(hasil);
-        forcePIBtoText(ws, hasil, kolom);
-
         const wb = XLSX.utils.book_new();
         XLSX.utils.book_append_sheet(wb, ws, "BARU");
         XLSX.writeFile(wb, "DATA_BARU_SAJA.xlsx");
     }
 }
 
-/* PEMBERSIH PETIK */
+/* ========================
+  PEMBERSIH PETIK
+======================== */
 async function processCleaner() {
     const file = fileClean.files[0];
-    if (!file) return alertMsg("Harap upload file.");
+    if (!file)
+        return alertMsg("Harap upload file.");
 
-    const data = await readExcel(file);
+    const data = await readExcelDynamicHeader(file);
     const kolom = detectKolomPIB(data[0]);
-    if (!kolom) return alertMsg("Kolom PIB tidak ditemukan.");
+
+    if (!kolom)
+        return alertMsg("Kolom PIB tidak ditemukan.");
 
     const cleaned = data.map(r => {
-        const copy = {...r};
+        let copy = {...r};
         copy[kolom] = cleanPIB(copy[kolom]);
         return copy;
     });
@@ -327,28 +353,14 @@ async function processCleaner() {
     document.getElementById("resultClean").innerHTML = "File berhasil dibersihkan.";
 
     const ws = XLSX.utils.json_to_sheet(cleaned);
-    forcePIBtoText(ws, cleaned, kolom);
-
     const wb = XLSX.utils.book_new();
     XLSX.utils.book_append_sheet(wb, ws, "BERSIH");
     XLSX.writeFile(wb, "PIB_TANPA_PETIK.xlsx");
 }
 
-/* FORCE TEXT PIB */
-function forcePIBtoText(ws, data, kolom) {
-    const header = XLSX.utils.sheet_to_json(ws, { header: 1, range: 0 })[0];
-    let idx = header.indexOf(kolom);
-
-    if (idx === -1) return;
-
-    for (let r = 1; r <= data.length; r++) {
-        const addr = XLSX.utils.encode_cell({ c: idx, r: r });
-        ws[addr].t = "s";
-        ws[addr].v = cleanPIB(ws[addr].v || "");
-    }
-}
-
-/* UPDATE LABEL */
+/* ========================
+      LABEL UPDATE
+======================== */
 fileLama.addEventListener("change", e => labelLama.innerText = e.target.files[0]?.name || "Belum ada file");
 fileBaru.addEventListener("change", e => labelBaru.innerText = e.target.files[0]?.name || "Belum ada file");
 fileClean.addEventListener("change", e => labelClean.innerText = e.target.files[0]?.name || "Belum ada file");
