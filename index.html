@@ -166,6 +166,11 @@
 </div>
 
 <script>
+
+/* =======================
+   HELPER FUNCTIONS
+======================= */
+
 function showTab(tab) {
     document.getElementById("compare").style.display = tab === "compare" ? "block" : "none";
     document.getElementById("clean").style.display = tab === "clean" ? "block" : "none";
@@ -182,10 +187,50 @@ function closeAlert() { document.getElementById("alertBox").style.display = "non
 
 function cleanPIB(x) {
     return String(x || "")
-        .replace(/^'/, "")  
-        .replace(/"/g, "")  
+        .replace(/^'/, "")
+        .replace(/"/g, "")
         .trim();
 }
+
+/* =======================
+   FIX PENTING: BACA BPOM
+   (RAW MODE seperti pandas)
+======================= */
+
+async function readExcel(file) {
+    const data = await file.arrayBuffer();
+    const workbook = XLSX.read(data);
+
+    const sheet = workbook.Sheets[workbook.SheetNames[0]];
+
+    // Baca semua baris mentah (tidak menghapus baris kosong)
+    const raw = XLSX.utils.sheet_to_json(sheet, {
+        header: 1,
+        blankrows: true,
+        defval: ""
+    });
+
+    // Cari baris header "NO. PIB"
+    let headerRow = -1;
+    for (let i = 0; i < raw.length; i++) {
+        const row = raw[i].map(x => String(x).toUpperCase());
+        if (row.some(col => col.includes("NO. PIB"))) {
+            headerRow = i;
+            break;
+        }
+    }
+
+    if (headerRow === -1) {
+        alertMsg("Kolom 'NO. PIB' tidak ditemukan! (header BPOM tidak terbaca)");
+        return null;
+    }
+
+    return XLSX.utils.sheet_to_json(sheet, { range: headerRow, defval: "" });
+}
+
+/* =======================
+   DETEKSI KOLOM PIB OTOMATIS
+======================= */
 
 function detectKolomPIB(row) {
     const keys = Object.keys(row);
@@ -196,6 +241,8 @@ function detectKolomPIB(row) {
             return k;
         }
     }
+
+    // fallback: cek pola data berpetik
     for (let k of keys) {
         const v = String(row[k] || "");
         if (v.startsWith("'") || v.includes("'") || v.includes('"')) return k;
@@ -204,22 +251,20 @@ function detectKolomPIB(row) {
     return null;
 }
 
-async function readExcel(file) {
-    const data = await file.arrayBuffer();
-    const wb = XLSX.read(data);
-    const sheet = wb.Sheets[wb.SheetNames[0]];
-    return XLSX.utils.sheet_to_json(sheet, { raw: false });
-}
+/* =======================
+   PERBANDINGAN DATA
+======================= */
 
-/* ------------------------- PERBANDINGAN DATA ------------------------- */
 async function processComparison() {
-    const fLama = fileLama.files[0];
-    const fBaru = fileBaru.files[0];
 
-    if (!fLama || !fBaru) return alertMsg("Harap upload kedua file.");
+    if (!fileLama.files[0] || !fileBaru.files[0]) {
+        return alertMsg("Harap upload kedua file.");
+    }
 
-    const lama = await readExcel(fLama);
-    const baru = await readExcel(fBaru);
+    const lama = await readExcel(fileLama.files[0]);
+    const baru = await readExcel(fileBaru.files[0]);
+
+    if (!lama || !baru) return;
 
     const kolom = detectKolomPIB(lama[0]);
     if (!kolom) return alertMsg("Kolom PIB tidak ditemukan.");
@@ -235,7 +280,7 @@ async function processComparison() {
     document.getElementById("resultCompare").innerHTML = `
         <b>Jumlah Data Lama:</b> ${lama.length}<br>
         <b>Jumlah Data Baru:</b> ${baru.length}<br>
-        <b>Data Baru Ditemukan:</b> ${hasil.length}<br><br>
+        <b>Data Baru Ditemukan:</b> ${hasil.length}<br>
     `;
 
     if (hasil.length > 0) {
@@ -246,12 +291,18 @@ async function processComparison() {
     }
 }
 
-/* ------------------------- CLEANER PETIK ------------------------- */
-async function processCleaner() {
-    const f = fileClean.files[0];
-    if (!f) return alertMsg("Harap upload file.");
+/* =======================
+   PEMBERSIH PETIK PIB
+======================= */
 
-    const data = await readExcel(f);
+async function processCleaner() {
+
+    if (!fileClean.files[0]) {
+        return alertMsg("Harap upload file.");
+    }
+
+    const data = await readExcel(fileClean.files[0]);
+    if (!data) return;
 
     const kolom = detectKolomPIB(data[0]);
     if (!kolom) return alertMsg("Kolom PIB tidak ditemukan.");
@@ -259,9 +310,8 @@ async function processCleaner() {
     data.forEach(r => r[kolom] = cleanPIB(r[kolom]));
 
     document.getElementById("resultClean").style.display = "block";
-    document.getElementById("resultClean").innerHTML = `
-        File berhasil dibersihkan. Download file akan dimulai.
-    `;
+    document.getElementById("resultClean").innerHTML =
+        "File berhasil dibersihkan. Download akan dimulai.";
 
     const ws = XLSX.utils.json_to_sheet(data);
     const wb = XLSX.utils.book_new();
@@ -269,10 +319,14 @@ async function processCleaner() {
     XLSX.writeFile(wb, "PIB_TANPA_PETIK.xlsx");
 }
 
-/* LABEL UPDATE */
+/* =======================
+   LABEL UPDATE
+======================= */
+
 fileLama.onchange = e => labelLama.innerText = e.target.files[0].name;
 fileBaru.onchange = e => labelBaru.innerText = e.target.files[0].name;
 fileClean.onchange = e => labelClean.innerText = e.target.files[0].name;
+
 </script>
 
 </body>
