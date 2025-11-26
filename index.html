@@ -1,67 +1,250 @@
 <!DOCTYPE html>
-<html>
+<html lang="id">
 <head>
-  <title>Cek Data PIB</title>
-  <script src="https://cdn.jsdelivr.net/npm/xlsx/dist/xlsx.full.min.js"></script>
+<meta charset="UTF-8">
+<title>Cek Data Baru vs Lama (PIB)</title>
+<meta name="viewport" content="width=device-width, initial-scale=1">
+
+<!-- SheetJS untuk membaca Excel -->
+<script src="https://cdn.jsdelivr.net/npm/xlsx/dist/xlsx.full.min.js"></script>
+
+<style>
+    body {
+        margin: 0;
+        font-family: Arial, sans-serif;
+        background: #f4f6f9;
+    }
+
+    .container {
+        max-width: 900px;
+        margin: 40px auto;
+        padding: 20px;
+        background: white;
+        border-radius: 16px;
+        box-shadow: 0 4px 12px rgba(0,0,0,0.1);
+    }
+
+    h1 {
+        text-align: center;
+        color: #222;
+    }
+
+    .file-group {
+        display: flex;
+        justify-content: space-between;
+        margin-bottom: 20px;
+        flex-wrap: wrap;
+    }
+
+    .file-card {
+        flex: 1;
+        margin: 10px;
+        padding: 20px;
+        background: #f8f9fb;
+        border-radius: 12px;
+        border: 2px dashed #c8ccd4;
+        text-align: center;
+        cursor: pointer;
+        transition: 0.3s;
+    }
+
+    .file-card:hover {
+        background: #eef2f5;
+    }
+
+    input[type="file"] {
+        display: none;
+    }
+
+    .button {
+        display: block;
+        width: 200px;
+        margin: 20px auto;
+        padding: 12px;
+        background: #007bff;
+        color: white;
+        border: none;
+        border-radius: 10px;
+        font-size: 16px;
+        cursor: pointer;
+        transition: 0.3s;
+    }
+
+    .button:hover {
+        background: #0056d6;
+    }
+
+    .result-box {
+        margin-top: 30px;
+        padding: 20px;
+        background: #e8f4ff;
+        border-left: 6px solid #007bff;
+        border-radius: 10px;
+    }
+
+    .alert {
+        position: fixed;
+        left: 50%;
+        top: 45%;
+        transform: translate(-50%, -50%);
+        background: white;
+        padding: 20px 30px;
+        border-radius: 16px;
+        box-shadow: 0 6px 18px rgba(0,0,0,0.2);
+        font-size: 18px;
+        display: none;
+    }
+
+    .alert button {
+        margin-top: 10px;
+        background: #ff3b30;
+        color: white;
+        padding: 8px 20px;
+        border: none;
+        border-radius: 8px;
+        cursor: pointer;
+    }
+
+    .loading {
+        display: none;
+        text-align: center;
+        margin-top: 20px;
+        font-size: 18px;
+        color: #555;
+    }
+
+</style>
 </head>
+
 <body>
 
-<h2>Cek Data Baru vs Lama (PIB)</h2>
+<div class="container">
+    <h1>Cek Data Baru vs Lama (PIB)</h1>
 
-<input type="file" id="fileLama" accept=".xlsx">
-<input type="file" id="fileBaru" accept=".xlsx">
-<button onclick="processFiles()">Proses</button>
+    <div class="file-group">
+        <label class="file-card" id="cardLama">
+            <strong>Upload Data LAMA</strong><br>
+            <span id="labelLama">Belum ada file</span>
+            <input type="file" id="fileLama" accept=".xlsx">
+        </label>
 
-<div id="output"></div>
+        <label class="file-card" id="cardBaru">
+            <strong>Upload Data BARU</strong><br>
+            <span id="labelBaru">Belum ada file</span>
+            <input type="file" id="fileBaru" accept=".xlsx">
+        </label>
+    </div>
+
+    <button class="button" onclick="processFiles()">Proses</button>
+
+    <div class="loading" id="loading">⏳ Sedang memproses data...</div>
+
+    <div class="result-box" id="resultBox" style="display:none;"></div>
+</div>
+
+<div class="alert" id="alertBox">
+    <span id="alertMessage"></span><br>
+    <button onclick="closeAlert()">Tutup</button>
+</div>
 
 <script>
-function clean(value) {
-  return String(value).replace("'", "").trim();
+function showAlert(msg) {
+    document.getElementById("alertMessage").innerText = msg;
+    document.getElementById("alertBox").style.display = "block";
+}
+function closeAlert() {
+    document.getElementById("alertBox").style.display = "none";
 }
 
+// CLEAN PIB
+function cleanPIB(x) {
+    return String(x || "").replace(/'/g, "").trim();
+}
+
+// BACA EXCEL + DETEKSI HEADER "NO. PIB"
 async function readExcel(file) {
-  const data = await file.arrayBuffer();
-  const workbook = XLSX.read(data);
-  const sheet = workbook.Sheets[workbook.SheetNames[0]];
-  return XLSX.utils.sheet_to_json(sheet, { raw: false });
+    const data = await file.arrayBuffer();
+    const workbook = XLSX.read(data);
+    const sheet = workbook.Sheets[workbook.SheetNames[0]];
+
+    const rows = XLSX.utils.sheet_to_json(sheet, { header: 1 });
+
+    let headerRowIndex = -1;
+
+    for (let i = 0; i < rows.length; i++) {
+        const row = rows[i].map(r => String(r || "").toUpperCase());
+        if (row.some(col => col.includes("NO. PIB"))) {
+            headerRowIndex = i;
+            break;
+        }
+    }
+
+    if (headerRowIndex === -1) {
+        showAlert("Kolom NO. PIB tidak ditemukan!");
+        return null;
+    }
+
+    return XLSX.utils.sheet_to_json(sheet, { range: headerRowIndex, raw: false });
 }
 
 async function processFiles() {
-  const fileLama = document.getElementById("fileLama").files[0];
-  const fileBaru = document.getElementById("fileBaru").files[0];
+    const fileLama = document.getElementById("fileLama").files[0];
+    const fileBaru = document.getElementById("fileBaru").files[0];
 
-  if (!fileLama || !fileBaru) {
-    alert("Upload kedua file!");
-    return;
-  }
+    if (!fileLama || !fileBaru) {
+        showAlert("Harap upload kedua file Excel!");
+        return;
+    }
 
-  const dataLama = await readExcel(fileLama);
-  const dataBaru = await readExcel(fileBaru);
+    document.getElementById("loading").style.display = "block";
 
-  // Temukan kolom NO. PIB
-  const kolomPIB = Object.keys(dataLama[0]).find(k => k.toUpperCase().includes("NO") && k.toUpperCase().includes("PIB"));
+    const dataLama = await readExcel(fileLama);
+    const dataBaru = await readExcel(fileBaru);
 
-  if (!kolomPIB) {
-    alert("Kolom NO. PIB tidak ditemukan!");
-    return;
-  }
+    if (!dataLama || !dataBaru) {
+        document.getElementById("loading").style.display = "none";
+        return;
+    }
 
-  // Bersihkan PIB
-  const oldPIB = dataLama.map(row => clean(row[kolomPIB]));
-  const newPIB = dataBaru.map(row => clean(row[kolomPIB]));
+    const kolomPIB = Object.keys(dataLama[0]).find(k => k.toUpperCase().includes("NO. PIB"));
 
-  // Ambil data benar-benar baru
-  const dataBaruSaja = dataBaru.filter(r => !oldPIB.includes(clean(r[kolomPIB])));
+    if (!kolomPIB) {
+        showAlert("NO. PIB tidak ditemukan setelah header dibaca!");
+        return;
+    }
 
-  document.getElementById("output").innerHTML =
-    `<p>Jumlah Data Baru: <b>${dataBaruSaja.length}</b></p>`;
+    const lamaPIB = dataLama.map(r => cleanPIB(r[kolomPIB]));
+    const baruPIB = dataBaru.map(r => cleanPIB(r[kolomPIB]));
 
-  // Download hasil sebagai Excel
-  const ws = XLSX.utils.json_to_sheet(dataBaruSaja);
-  const wb = XLSX.utils.book_new();
-  XLSX.utils.book_append_sheet(wb, ws, "DATA BARU");
-  XLSX.writeFile(wb, "DATA_BARU_SAJA.xlsx");
+    const dataBaruOnly = dataBaru.filter(r => !lamaPIB.includes(cleanPIB(r[kolomPIB])));
+
+    // Tampilkan hasil
+    document.getElementById("resultBox").style.display = "block";
+    document.getElementById("resultBox").innerHTML = `
+        <h3>Hasil Perbandingan</h3>
+        <p><b>Jumlah Data Lama:</b> ${lamaPIB.length}</p>
+        <p><b>Jumlah Data Baru:</b> ${baruPIB.length}</p>
+        <p><b>DATA BARU ditemukan:</b> ${dataBaruOnly.length}</p>
+    `;
+
+    // Export Excel
+    if (dataBaruOnly.length > 0) {
+        const ws = XLSX.utils.json_to_sheet(dataBaruOnly);
+        const wb = XLSX.utils.book_new();
+        XLSX.utils.book_append_sheet(wb, ws, "DATA_BARU");
+        XLSX.writeFile(wb, "DATA_BARU_SAJA.xlsx");
+    }
+
+    document.getElementById("loading").style.display = "none";
 }
+
+// Update label file upload
+document.getElementById("fileLama").addEventListener("change", e => {
+    document.getElementById("labelLama").innerText = e.target.files[0]?.name || "Belum ada file";
+});
+document.getElementById("fileBaru").addEventListener("change", e => {
+    document.getElementById("labelBaru").innerText = e.target.files[0]?.name || "Belum ada file";
+});
 </script>
 
 </body>
